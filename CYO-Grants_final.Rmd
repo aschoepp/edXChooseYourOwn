@@ -66,7 +66,7 @@ Although the data is reasonably clean, it needed some initial data wrangling for
   #grants = filter(grants, Amount>100)  #Study grants that are greater than $100
   #grants = filter(grants, LotteryFund==TRUE)
   #write.csv(grants, "C://Users/Alana.Schoepp/OneDrive - Shell/Documents/edX/CYO Data/grantsSmall.csv")
-  grants = read.csv("~/edX/CYO Grants/grantsSmall.csv")
+  grants = read.csv("grantsSmall.csv")
 
 #Simplify the fiscal year range to a single year and convert Payment date to a date
   grants  = grants %>% 

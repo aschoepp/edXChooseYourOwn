@@ -29,8 +29,7 @@ library(randomForest)
 #grants = filter(grants, Amount>100)  #Study grants that are greater than $100
 #grants = filter(grants, LotteryFund==TRUE)
 #write.csv(grants, "C://Users/Alana.Schoepp/OneDrive - Shell/Documents/edX/CYO Data/grantsSmall.csv")
-grants = read.csv("~/edX/CYO Grants/grantsSmall.csv")
-
+grants = read.csv("grantsSmall.csv")
 
 #=======================Data wrangling
 #create a column, "yearstart", that is the beginning year of the fiscal year range ("DisplayFiscalYear")
