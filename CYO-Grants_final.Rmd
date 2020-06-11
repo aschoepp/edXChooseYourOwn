@@ -1,0 +1,279 @@
+---
+title: "HarvardX Data ScienceCapstone Project: Choose Your Own, Grants"
+author: "Alana Schoepp"
+date: "6/7/2020"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+## **Introduction**  
+The Government of Alberta allocates grant money to non-profit organizations.  The purpose of this project is to determine if we can use data science and modeling to determine the factors in being awarded a large grant, $50,000 or greater.  This information could be used to examine biases in government funding or by organizations to understand how to apply for grants to receive large grants.  The data set for grant allocation over a 6 year time window, from 2014-2019, is publicly available and can be downloaded from the website: https://open.alberta.ca/dataset/grant-disclosure/resource/8c3f0f68-689e-4543-91e7-17d535a2cdbe?view_id=2c055954-6f20-480f-a3f0-0d804545d048
+
+
+
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warnings = FALSE, results  = "hide", include=FALSE}
+if (!require(tidyr)) install.packages('tidyr')
+library(tidyr)
+if (!require(ggplot2)) install.packages('ggplot2')
+library(ggplot2)
+if (!require(stringr)) install.packages('stringr')
+library(stringr)
+if (!require(lubridate)) install.packages('lubridate')
+library(lubridate)
+if (!require(dplyr)) install.packages('dplyr')
+library(dplyr)
+if (!require(tidyverse)) install.packages('tidyverse')
+library(tidyverse)
+if (!require(caret)) install.packages('caret')
+library(caret)
+if (!require(randomForest)) install.packages('randomForest')
+library(randomForest)
+```
+
+
+The dataset was large, ~120 Mb and had rows that contained negative grant amounts as well as very small grant amounts, less than $100.  The negative values may be grants that need to be repaid for a variety of reasons.  In any case, I filtered the data to only include positive grants awarded over the amount of 100 CAD.  I also only wanted to look at grants that were awarded from the Lottery Fund. In Alberta, all gambling proceeds go to non-profit organizations and this is the population of the dataset that I wanted to study.  Thhis reduced the dataset to ~3 Mb.
+
+The data has the following features:
+Ministry:  the government ministry that oversees the program
+BUName (Business Unit Name):  Business unit within the ministry
+Recipient:  Grant recipient
+Program:  Name of the program that the recipient is involved in
+Amount:  Grant amount
+PaymentDate:  Date the grant was payed to the recipient.  All payments were made in July.
+Display Fiscal Year:  The fiscal year displayed as a range
+LotteryFund:  Indicator if the grant was paid from the Lottery Fund
+
+I binned the grants into those that were larger than $50,000 and those that were less and then I created a series of graphs to show which features would be relevant to determining the larger grant allocation. Then I broke the data into a training and test set and ran random forest with both the randomForest and caret implementation as well as a caret loess model to arrive at a prediction.
+
+
+## **Analysis**  
+
+
+### **Data cleaning**   
+Although the data is reasonably clean, it needed some initial data wrangling for modeling. AFter reducing the data set size by filtering the small grant amounts less than 100 CAD and  filtering to only keep grants awarded from the Alberta Lottery fund, I calculated a single year instead of keeping the Fiscal year range and I converted the Payment Date to a date.  In addition, I created a bin column called amountbin and classified the Amount as either greater or less than (or equal to) $50,000 CAD.  
+
+```{r echo=TRUE, eval=TRUE, message=FALSE, warnings = FALSE}
+#Reduce the data set size
+  #grants = read.csv("C://Users/Alana.Schoepp/OneDrive - Shell/Documents/edX/CYO Data/grants.csv")
+  #grants = filter(grants, Amount>100)  #Study grants that are greater than $100
+  #grants = filter(grants, LotteryFund==TRUE)
+  #write.csv(grants, "C://Users/Alana.Schoepp/OneDrive - Shell/Documents/edX/CYO Data/grantsSmall.csv")
+  grants = read.csv("~/edX/CYO Grants/grantsSmall.csv")
+
+#Simplify the fiscal year range to a single year and convert Payment date to a date
+  grants  = grants %>% 
+    mutate(yearstart = word(as.character(DisplayFiscalYear), 1))  #create start year of fiscal year
+  grants$PaymentDate = as_date(as.character(grants$PaymentDate), format="%M/%d/%Y", tz="UTC")
+
+  grants$amountbin = as.factor(case_when(
+     grants$Amount<=50000 ~ "50+",
+    TRUE ~ "50-" 
+  ))
+
+
+#Drop columns unrelated to the study to reduce data set  
+drops = c( "DisplayFiscalYear")
+grants = grants[(names(grants) %in% drops)==FALSE]
+
+print(head(grants))
+
+```
+
+The data has ~2500 rows with about 22367 grants of over $1 mln and 3142 less than the target.  The summary shows that there are only NA values associated with the Payment Date column.  The Payment Date will be discarded in this study because we will use the year from the DisplayFiscalYear as a time feature.  All grants were paid in July so the year is the only information with significance.  The Ministry and BUName columns contain redundant information, we can test using them both in teh model however we expect that using both will not increase the accuracy of prediction over only using one.
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warnings = FALSE}
+#Print a summary of the data
+grants %>% summary()
+```
+
+The grants have a range of $100 to 94487831 CAD (Canadian dollars).  A histogram of the grant amounts show that most of the grants are less than $50,000 although there are some grants that are larger than 1 mln CAD. The median of the grant is calculated.
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warnings = FALSE}
+
+#plot histogram of grants (include 98.2% of grants)
+grants %>% 
+  ggplot(aes(Amount)) + 
+  geom_histogram( color = "black") +
+  xlim(0, 1000000 ) +
+  ylim(0,10000)
+
+#calculate median of grant amount
+median(grants$Amount)  # $1600
+print(paste(c("Median grant amount:  ", median(grants$Amount) )))
+
+
+```
+
+### **Data Exploration, Visualizations and Insight**
+Scatter plots were made of the different features and their average amounts to understand their influence on the grant amount. The scatter plot of averge grant vs Ministry shows that 2 ministries, Health and Tourism, received greater funding than the other 10. 
+```{r echo=FALSE, eval=TRUE, message=FALSE, warnings = FALSE}
+#group grants by the feature of interest, calculate the mean grant amount for it, and plot as a scatter plt
+ grants %>%
+  group_by(Ministry) %>%
+  summarize(mean_Amount = mean(Amount)) %>%
+  ggplot() %>%  + 
+  geom_point(aes(x=mean_Amount, y=Ministry))
+
+
+```
+The BUName seems to contain the same information as the Ministry column and is not expected to contribute more accuracy to the models than Ministry alone.
+```{r echo=FALSE, eval=TRUE, message=FALSE, warnings = FALSE}
+#group grants by the feature of interest, calculate the mean grant amount for it, and plot as a scatter plt
+grants %>%
+  group_by(BUName) %>%
+  summarize(mean_Amount = mean(Amount))%>%
+  ggplot() %>%  + 
+  geom_point(aes(x=mean_Amount, y=BUName))
+
+
+```
+There is a large variation in funding by year with the mean grant funding generally decreasing from 2014 to 2019.  The years 2016 and 2017 had lower averages than years 2014 and 2015, however a few outlying large grants were awarded in the years of 2016-2017 that show up in the graph of the raw Amount vs year that are obscured in the first graph of "mean grant" vs "year". 
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warnings = FALSE}
+#group grants by the feature of interest, calculate the mean grant amount for it, and plot as a scatter plt
+grants %>%
+  group_by(yearstart) %>%
+  summarize(mean_Amount = mean(Amount))%>%
+  ggplot() %>%  + 
+  geom_point(aes(x=mean_Amount, y=yearstart))
+
+
+```
+
+
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warnings = FALSE}
+#plot Amount vs date
+grants %>%
+  ggplot(aes(x=yearstart, y=Amount)) + 
+  geom_point() 
+
+```
+
+There are 133 unique values in the Program column of the dataset with some significant outliers.  
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warnings = FALSE}
+#group grants by the feature of interest, calculate the mean grant amount for it, and plot as a scatter plt
+grants %>%
+  group_by(Program) %>%
+  summarize(mean_Amount = mean(Amount))%>%
+  ggplot() %>%  + 
+  geom_point(aes(x=mean_Amount, y=Program))
+
+
+```
+
+There are 8285 different grant recipients in the Recipient column.  The graph below shows that although the Ministry and Program may have outliers in the amount of awards given out, indicting large allotments from certain ministries and programs, the funding is more evenly distributed to the recipients.  A single program or ministry is supporting a large number of recipients. 
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warnings = FALSE}
+#group grants by the feature of interest, calculate the mean grant amount for it, and plot as a scatter plt
+grants %>%
+  group_by(Recipient) %>%
+  summarize(mean_Amount = mean(Amount))%>%
+  ggplot() %>%  + 
+  geom_point(aes(x=mean_Amount, y=Recipient))
+```
+
+In conclusion, we expect Ministry, Program, year to impact the final model.  The information in the BUName column seems redundant to the Ministry so we don't expect it to have a further impact on accuracy.  The number of individual recipients in the data are so large that it may be difficult to incorporate it into the model and further text processing would be good to group that information into a more meaningful form.  Most of the features in this dataset are text data and not numeric which may limit some of the techniques that can be used.
+
+
+
+### **Modeling Approaches**  
+
+As the data is mostly textual, we focussed on testing which features were important to predict if the grants awarded were greater than or less than $50,000 and algorithms of random forest (randomForest and caret implementation), Linear Discriminant Analysis, Quadratic Discriminant Analysis, Loess and tried an ensemble method.  I tested the features Ministry, year (yearstart), Program and BUName to see which features would increase the model accuracy.  The data was broken into 2 data sets, one for testing and training. 
+
+```{r echo=TRUE, eval=TRUE, message=FALSE, warnings = FALSE}
+# generate training and test sets
+set.seed(9, sample.kind = "Rounding")
+test_index <- createDataPartition(grants$Amount, times = 1, p = 0.5, list = FALSE)
+test_set <- grants[test_index, ]
+train_set <- grants[-test_index, ]
+
+```
+
+I built a model using the "randomForest" library and tested the features, "Ministry", "yearstart", and "BUName" building models by adding the features one at a time.  The features "Ministry" and "BUName" have similar information.  I could not use the features Programs or Recipients because the random forest algorithm cannot handle features with greater than 53 predictors and Programs has 113 and Recipients has greater than 8000.
+
+```{r echo=TRUE, eval=TRUE, message=FALSE, warnings = FALSE}
+#Model 1:  randomForest algorithm with Ministry feature.  Calculate the model, generate predictions and quantify the accuracy
+train_rf <- randomForest(amountbin ~ Ministry, data=train_set)
+z=predict(train_rf, test_set)
+acc1 = confusionMatrix(z, test_set$amountbin)$overall["Accuracy"]
+acc_results <- tibble(method = "Random Forest (randomForest) Ministry ", Accuracy = acc1)
+
+#Model 2:  randomForest algorithm with Ministry and yearstart features.  Calculate the model, generate predictions and quantify the accuracy
+train_rf <- randomForest(amountbin ~ yearstart+Ministry, data=train_set)
+z=predict(train_rf, test_set)
+acc2 = confusionMatrix(z, test_set$amountbin)$overall["Accuracy"]
+acc_results <- bind_rows(acc_results,
+                         data_frame(method="Random Forest Ministry + year",
+                                    Accuracy = acc2 ))
+
+#Model 3:  randomForest algorithm with Ministry, year and BUName features.  Calculate the model, generate predictions and quantify the accuracy
+train_rf <- randomForest(amountbin ~ Ministry+yearstart+BUName, data=train_set)
+z=predict(train_rf, test_set)
+acc3 = confusionMatrix(z, test_set$amountbin)$overall["Accuracy"]
+acc_results <- bind_rows(acc_results,data_frame(method="Random Forest Ministry + year + BUName", Accuracy = acc3 ))
+
+```
+
+Next, I tested the random forest implementation in the caret package.  The caret random forest was ~7 times slower than the randomForest package.
+
+```{r echo=TRUE, eval=TRUE, message=FALSE, warnings = FALSE}
+#Try the caret implementation of the random forest algorithm with year and ministry features
+#fit the model, predict the binned amounts, report the final accuracy, mtry value and the variable importance
+train_rf <- train(amountbin ~ yearstart+Ministry,  method = "rf", data = train_set)
+y_hat_rf <- predict(train_rf, test_set)
+acc_rf = confusionMatrix(y_hat_rf, test_set$amountbin)$overall["Accuracy"]
+vi = varImp(train_rf) 
+acc_results <- bind_rows(acc_results,data_frame(method="Caret rf + Ministry + year", Accuracy = acc_rf ))
+
+
+
+```
+I also tested the caret package with the Loess algorithm.  It only ran successfully using the year feature, "yearstart" and would not run with the  Ministry feature.  It ran in less than a minute.
+
+```{r echo=TRUE, eval=TRUE, message=FALSE, warnings = FALSE}
+#Try the caret implementation of the loess algorithm with year feature
+#fit the model, predict the binned amounts, report the final accuracy, mtry value and the variable importance
+train_loess <- train(as.factor(amountbin) ~ Ministry,  method = "gamLoess", data = train_set)
+y_hat_loess <- predict(train_loess, test_set)
+acc_loess =confusionMatrix(y_hat_loess, test_set$amountbin)$overall["Accuracy"]
+acc_results <- bind_rows(acc_results,data_frame(method="Caret Loess + Ministry + year", Accuracy = acc_loess ))
+
+
+```
+
+
+## **Results**
+I ran a series of 3 different algorithms; random forest implementations from the randomForest package and the caret package, as well as a Loess algorithm from the caret package.  I also tested the impact of 3 different predictors, the Ministry that sponsored the funding, the year of the funding and the Business Unit.  The Business Unit and Ministry contained similar information so having both in the model did not increase the accuracy of the model.  Using the Ministry as well as the year to model the data yielded the best result of 77.8% accuracy.  In this instance, the randomForest and caret rf (random forest) algorithms yielded the same result however the randomForest algorithm was significantly shorter, about 7 times as fast, in runtime.  The Loess model was also fast however it used a single feature instead of 2 so that was expected.
+
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warnings = FALSE}
+print(acc_results)
+
+```
+The random forest model also gives a list of variables and their influence on the final model.  The greatest factors influencing the model was the Ministry of Culture and Tourism, the Ministry of Indigenous Relations and the year 2015 as can be seen below.
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warnings = FALSE}
+print(varImp(train_rf))
+```
+
+
+## **Conclusions**  
+I built a machine learning model to understand the factors that influence Alberta government grant allocations from the lottery fund that have a value over $50,000.  The data is publicly available from the Alberta government and includes the ministry and Business Unit that the funding comes from, the year of funding, recipient, program funded and if it is paid out of the lottery fund.  Some simple data wrangling was required to create a column that represents the year of funding.  
+
+I built 3 models using the randomForest algorithm, the caret implementation of random forest and a loess model and testing the influence of the Ministry, Business Unit name and the year of funding.  The results varied from 75.5% to 77.8% accuracy.  The most accurate model was either random forest model using the Ministry and the year with an accuracy of 77.8%. 
+
+The study is limited by the textual nature of the features and the large number of predictors in the Program and Recipient columns.  I would recommend further text processing to extract additional information from these columns, such as geographical information as many of the programs and recipients reference a town or geographic locale as well as grouping this data to reduce the number of predictors so they could be used in the model.
+
+The model results were interesting to understand how the Alberta government spends money and to predict how to write a grant application to increase the chances of receiving a large grant.  According to the variable importance feature of the random forest model, grants from the Ministry of Culture and Tourism as well as Indigenous Relations will receive the highest funding.  The year is also an important predictor.
+
+
